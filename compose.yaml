@@ -1,0 +1,211 @@
+"""
+Finance Tracker - Backend
+Flask + SQLite + SQLAlchemy
+Author: Fatin Ahmed & Pratyush V — SRM KTR
+Course: 21CSE216P Linux and Container Technologies
+"""
+
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import bcrypt
+import os
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
+CORS(app)
+
+# ── Database Config ───────────────────────────────────────────────────────────
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(DATA_DIR, 'finance.db')}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
+
+# ── Models ────────────────────────────────────────────────────────────────────
+
+class User(db.Model):
+    __tablename__ = "users"
+    id            = db.Column(db.Integer, primary_key=True)
+    username      = db.Column(db.String(80), unique=True, nullable=False)
+    pin_hash      = db.Column(db.String(200), nullable=False)
+    recovery_word = db.Column(db.String(100), nullable=False)
+    budget_limit  = db.Column(db.Float, default=0.0)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Expense(db.Model):
+    __tablename__ = "expenses"
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    title       = db.Column(db.String(120), nullable=False)
+    amount      = db.Column(db.Float, nullable=False)
+    category    = db.Column(db.String(60), default="General")
+    description = db.Column(db.String(250))
+    date        = db.Column(db.String(20), default=lambda: datetime.utcnow().strftime("%Y-%m-%d"))
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ── Auth Routes ───────────────────────────────────────────────────────────────
+
+@app.route("/register", methods=["POST"])
+def register():
+    data          = request.get_json()
+    username      = data.get("username", "").strip()
+    pin           = str(data.get("pin", "")).strip()
+    recovery_word = data.get("recovery_word", "").strip()
+
+    if not username or not pin or not recovery_word:
+        return jsonify({"error": "All fields are required."}), 400
+    if len(pin) != 6 or not pin.isdigit():
+        return jsonify({"error": "PIN must be exactly 6 digits."}), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "Username already exists."}), 409
+
+    pin_hash = bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
+    user = User(username=username, pin_hash=pin_hash, recovery_word=recovery_word.lower())
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({"message": "Registered successfully!", "user_id": user.id}), 201
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    data     = request.get_json()
+    username = data.get("username", "").strip()
+    pin      = str(data.get("pin", "")).strip()
+
+    user = User.query.filter_by(username=username).first()
+    if not user or not bcrypt.checkpw(pin.encode(), user.pin_hash.encode()):
+        return jsonify({"error": "Invalid username or PIN."}), 401
+
+    return jsonify({"message": "Login successful!", "user_id": user.id,
+                    "username": user.username, "budget_limit": user.budget_limit}), 200
+
+
+@app.route("/recover", methods=["POST"])
+def recover():
+    data          = request.get_json()
+    username      = data.get("username", "").strip()
+    recovery_word = data.get("recovery_word", "").strip().lower()
+    new_pin       = str(data.get("new_pin", "")).strip()
+
+    user = User.query.filter_by(username=username).first()
+    if not user or user.recovery_word != recovery_word:
+        return jsonify({"error": "Invalid username or recovery word."}), 401
+    if len(new_pin) != 6 or not new_pin.isdigit():
+        return jsonify({"error": "New PIN must be 6 digits."}), 400
+
+    user.pin_hash = bcrypt.hashpw(new_pin.encode(), bcrypt.gensalt()).decode()
+    db.session.commit()
+    return jsonify({"message": "PIN reset successfully!"}), 200
+
+
+# ── Budget Routes ─────────────────────────────────────────────────────────────
+
+@app.route("/budget/<int:user_id>", methods=["PUT"])
+def set_budget(user_id):
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+    user.budget_limit = float(data.get("budget_limit", 0))
+    db.session.commit()
+    return jsonify({"message": "Budget limit updated!", "budget_limit": user.budget_limit})
+
+
+# ── Expense Routes ────────────────────────────────────────────────────────────
+
+@app.route("/expenses/<int:user_id>", methods=["GET"])
+def get_expenses(user_id):
+    expenses = Expense.query.filter_by(user_id=user_id)\
+                            .order_by(Expense.created_at.desc()).all()
+    return jsonify([{
+        "id": e.id, "title": e.title, "amount": e.amount,
+        "category": e.category, "description": e.description, "date": e.date
+    } for e in expenses])
+
+
+@app.route("/expenses/<int:user_id>", methods=["POST"])
+def add_expense(user_id):
+    data     = request.get_json()
+    title    = data.get("title", "").strip()
+    amount   = data.get("amount")
+    category = data.get("category", "General").strip()
+    desc     = data.get("description", "").strip()
+    date     = data.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+
+    if not title or amount is None:
+        return jsonify({"error": "Title and amount are required."}), 400
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "Amount must be a positive number."}), 400
+
+    expense = Expense(user_id=user_id, title=title, amount=amount,
+                      category=category, description=desc, date=date)
+    db.session.add(expense)
+    db.session.commit()
+
+    # Budget warning check
+    user        = User.query.get(user_id)
+    total_spent = db.session.query(db.func.sum(Expense.amount))\
+                            .filter_by(user_id=user_id).scalar() or 0
+    warning = None
+    if user.budget_limit > 0 and total_spent >= user.budget_limit:
+        warning = f"⚠️ You have exceeded your budget of ₹{user.budget_limit:.2f}!"
+    elif user.budget_limit > 0 and total_spent >= user.budget_limit * 0.9:
+        warning = f"⚠️ You have used 90% of your budget (₹{user.budget_limit:.2f})!"
+
+    return jsonify({
+        "message": "Expense added successfully!",
+        "total_spent": total_spent,
+        "warning": warning
+    }), 201
+
+
+@app.route("/expenses/<int:expense_id>", methods=["DELETE"])
+def delete_expense(expense_id):
+    expense = Expense.query.get_or_404(expense_id)
+    db.session.delete(expense)
+    db.session.commit()
+    return jsonify({"message": "Expense deleted successfully!"})
+
+
+@app.route("/expenses/total/<int:user_id>", methods=["GET"])
+def get_total(user_id):
+    total = db.session.query(db.func.sum(Expense.amount))\
+                      .filter_by(user_id=user_id).scalar() or 0
+    user  = User.query.get(user_id)
+    return jsonify({"total_spent": round(total, 2),
+                    "budget_limit": user.budget_limit if user else 0})
+
+
+@app.route("/expenses/summary/<int:user_id>", methods=["GET"])
+def get_summary(user_id):
+    """Category-wise breakdown for Chart.js pie chart."""
+    results = db.session.query(Expense.category, db.func.sum(Expense.amount))\
+                        .filter_by(user_id=user_id)\
+                        .group_by(Expense.category).all()
+    return jsonify([{"category": r[0], "total": round(r[1], 2)} for r in results])
+
+
+# ── Serve Frontend ────────────────────────────────────────────────────────────
+
+@app.route("/")
+@app.route("/ui")
+def serve_ui():
+    return send_from_directory("templates", "index.html")
+
+
+# ── Init & Run ────────────────────────────────────────────────────────────────
+
+with app.app_context():
+    db.create_all()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)

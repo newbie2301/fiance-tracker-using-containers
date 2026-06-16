@@ -1,0 +1,164 @@
+# Containerized Personal Finance Tracker
+> Capstone Project — 21CSE216P Linux and Container Technologies
+> SRM Institute of Science and Technology, Kattankulathur
+
+**Authors:** Fatin Ahmed (RA2311026010989) & Pratyush V (RA2311026010977)
+**Guide:** Mr. Manoj Kushwaha, Assistant Professor, Dept of Computational Intelligence
+
+---
+
+## About
+
+A lightweight, privacy-focused personal finance tracker built with Flask and SQLite, containerized using Podman. Users can register, log in with a 6-digit PIN, record expenses, set budget limits, and view spending breakdowns through an interactive dashboard with Chart.js visualizations.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11, Flask 2.x |
+| Database | SQLite 3, SQLAlchemy ORM |
+| Frontend | HTML5, CSS3, JavaScript, Chart.js |
+| Auth | bcrypt (PIN hashing) |
+| Container | Podman (rootless) |
+| Version Control | Git & GitHub |
+
+---
+
+## Features
+
+- **PIN-based authentication** with bcrypt hashing
+- **Account recovery** via recovery word
+- **Add / Delete expenses** with category, date, and description
+- **Budget limit** with 90% and 100% warnings
+- **Category-wise pie chart** (Chart.js)
+- **Real-time total** updates after every transaction
+- **Fully containerized** — runs anywhere with Podman or Docker
+
+---
+
+## Project Structure
+
+```
+finance_tracker/
+├── app.py              ← Flask backend (routes, models, APIs)
+├── Containerfile       ← Podman container definition
+├── requirements.txt    ← Python dependencies
+├── templates/
+│   └── index.html      ← Full frontend (auth + dashboard)
+├── static/             ← (CSS/JS if separated)
+├── data/               ← SQLite database stored here
+└── README.md
+```
+
+---
+
+## REST API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/register` | Register new user |
+| POST | `/login` | Login with PIN |
+| POST | `/recover` | Reset PIN via recovery word |
+| PUT | `/budget/<user_id>` | Set monthly budget |
+| GET | `/expenses/<user_id>` | Get all expenses |
+| POST | `/expenses/<user_id>` | Add new expense |
+| DELETE | `/expenses/<expense_id>` | Delete expense |
+| GET | `/expenses/total/<user_id>` | Get total spent + budget |
+| GET | `/expenses/summary/<user_id>` | Category breakdown for chart |
+
+---
+
+## Run Without Container (Local)
+
+```bash
+# Clone
+git clone https://github.com/newbie2301/finance-tracker
+cd finance-tracker
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run
+python app.py
+```
+
+Open `http://localhost:5000` in your browser.
+
+---
+
+## Run With Podman (Containerized)
+
+```bash
+# Build the image
+podman build -t finance-tracker .
+
+# Run the container
+podman run -d -p 5000:5000 --name finance-tracker_backend_1 localhost/finance-tracker
+
+# Open in browser
+http://localhost:5000
+```
+
+### Container Management Commands
+
+| Operation | Command |
+|---|---|
+| View running containers | `podman ps` |
+| View all containers | `podman ps -a` |
+| Stop container | `podman stop finance-tracker_backend_1` |
+| Start container | `podman start finance-tracker_backend_1` |
+| View logs | `podman logs -f finance-tracker_backend_1` |
+| Open shell inside | `podman exec -it finance-tracker_backend_1 bash` |
+| Check database | `podman exec -it finance-tracker_backend_1 sqlite3 /app/data/finance.db` |
+| Remove container | `podman rm finance-tracker_backend_1` |
+| Remove image | `podman rmi localhost/finance-tracker` |
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│              Podman Container                │
+│                                              │
+│  ┌─────────────┐      ┌──────────────────┐  │
+│  │  Frontend   │ ───▶ │  Flask Backend   │  │
+│  │  HTML/CSS   │      │  REST APIs       │  │
+│  │  Chart.js   │ ◀─── │  SQLAlchemy ORM  │  │
+│  └─────────────┘      └────────┬─────────┘  │
+│                                │             │
+│                       ┌────────▼─────────┐  │
+│                       │  SQLite Database  │  │
+│                       │  /app/data/       │  │
+│                       └──────────────────┘  │
+└──────────────────────────────────────────────┘
+```
+
+---
+
+## Challenges & Solutions
+
+| Challenge | Solution |
+|---|---|
+| SQLite permission error in rootless Podman | `RUN mkdir -p /app/data && chmod 777 /app/data` in Containerfile |
+| Flask not accessible from host | Port mapping `-p 5000:5000` in podman run |
+| Total not updating after add/delete | Async `loadTotal()` function called after every operation |
+| Budget warning not showing | Fixed return statement in `add_expense()` to always include `warning` field |
+| Stale cache during rebuilds | `podman rmi -f` before rebuild to force clean image |
+
+---
+
+## Run With podman-compose
+
+```bash
+# Start
+podman-compose up -d --build
+
+# Stop and clean
+podman-compose down
+podman rm -f finance-tracker_backend_1
+podman rmi -f localhost/finance-tracker_backend
+podman-compose up -d --build
+```
